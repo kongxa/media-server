@@ -23,6 +23,7 @@
     <ClInclude Include="include\amf3.h" />
     <ClInclude Include="include\aom-av1.h" />
     <ClInclude Include="include\flv-demuxer.h" />
+    <ClInclude Include="include\flv-header.h" />
     <ClInclude Include="include\flv-muxer.h" />
     <ClInclude Include="include\flv-parser.h" />
     <ClInclude Include="include\flv-proto.h" />
@@ -33,7 +34,9 @@
     <ClInclude Include="include\mpeg4-avc.h" />
     <ClInclude Include="include\mpeg4-bits.h" />
     <ClInclude Include="include\mpeg4-hevc.h" />
+    <ClInclude Include="include\mpeg4-vvc.h" />
     <ClInclude Include="include\opus-head.h" />
+    <ClInclude Include="include\riff-acm.h" />
     <ClInclude Include="include\webm-vpx.h" />
   </ItemGroup>
   <ItemGroup>
@@ -50,6 +53,7 @@
     <ClCompile Include="source\hevc-annexbtomp4.c" />
     <ClCompile Include="source\hevc-mp4toannexb.c" />
     <ClCompile Include="source\mp3-header.c" />
+    <ClCompile Include="source\mpeg4-vvc.c" />
     <ClCompile Include="source\mpeg4-aac-asc.c" />
     <ClCompile Include="source\mpeg4-aac.c" />
     <ClCompile Include="source\mpeg4-annexbtomp4.c" />
@@ -57,6 +61,9 @@
     <ClCompile Include="source\mpeg4-hevc.c" />
     <ClCompile Include="source\mpeg4-mp4toannexb.c" />
     <ClCompile Include="source\opus-head.c" />
+    <ClCompile Include="source\riff-acm.c" />
+    <ClCompile Include="source\vvc-annexbtomp4.c" />
+    <ClCompile Include="source\vvc-mp4toannexb.c" />
     <ClCompile Include="source\webm-vpx.c" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
@@ -69,26 +76,26 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>

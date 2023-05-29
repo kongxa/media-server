@@ -8,22 +8,28 @@
 extern "C" {
 #endif
 
+#include "mpeg-proto.h"
+
 enum
 {
-	STREAM_VIDEO_MPEG4	= 0x10,
-	STREAM_VIDEO_H264	= 0x1b,
-	STREAM_VIDEO_H265   = 0x24,
-	STREAM_VIDEO_SVAC	= 0x80,
-	STREAM_AUDIO_MP3	= 0x04,
-	STREAM_AUDIO_AAC	= 0x0f,
-	STREAM_AUDIO_G711A	= 0x90,
-	STREAM_AUDIO_G711U	= 0x91,
-	STREAM_AUDIO_G722	= 0x92,
-	STREAM_AUDIO_G723	= 0x93,
-	STREAM_AUDIO_G729	= 0x99,
-	STREAM_AUDIO_SVAC	= 0x9B,
-	STREAM_AUDIO_OPUS   = 0x9C,
+	STREAM_VIDEO_MPEG4  = PSI_STREAM_MPEG4,
+	STREAM_VIDEO_H264	= PSI_STREAM_H264,
+	STREAM_VIDEO_H265   = PSI_STREAM_H265,
+	STREAM_VIDEO_SVAC	= PSI_STREAM_VIDEO_SVAC,
+	STREAM_AUDIO_MP3	= PSI_STREAM_AUDIO_MPEG1,
+	STREAM_AUDIO_AAC	= PSI_STREAM_AAC,
+	STREAM_AUDIO_EAC3	= PSI_STREAM_AUDIO_EAC3,
+	STREAM_AUDIO_G711A	= PSI_STREAM_AUDIO_G711A,
+	STREAM_AUDIO_G711U	= PSI_STREAM_AUDIO_G711U,
+	STREAM_AUDIO_G722	= PSI_STREAM_AUDIO_G722,
+	STREAM_AUDIO_G723	= PSI_STREAM_AUDIO_G723,
+	STREAM_AUDIO_G729	= PSI_STREAM_AUDIO_G729,
+	STREAM_AUDIO_SVAC	= PSI_STREAM_AUDIO_SVAC,
+	STREAM_AUDIO_OPUS   = PSI_STREAM_AUDIO_OPUS,
 };
+
+// e.g.: deprecated STREAM_VIDEO_H264, please use with PSI_STREAM_H264
+//#pragma deprecated(STREAM_VIDEO_MPEG4,STREAM_VIDEO_H264,STREAM_VIDEO_H265,STREAM_VIDEO_SVAC,STREAM_AUDIO_MP3,STREAM_AUDIO_AAC,STREAM_AUDIO_EAC3,STREAM_AUDIO_G711A,STREAM_AUDIO_G711U,STREAM_AUDIO_G722,STREAM_AUDIO_G723,STREAM_AUDIO_G729,STREAM_AUDIO_SVAC,STREAM_AUDIO_OPUS)
 
 struct ps_muxer_func_t
 {
@@ -51,7 +57,7 @@ struct ps_muxer_t;
 struct ps_muxer_t* ps_muxer_create(const struct ps_muxer_func_t *func, void* param);
 int ps_muxer_destroy(struct ps_muxer_t* muxer);
 /// Add audio/video stream
-/// @param[in] codecid PSI_STREAM_H264/PSI_STREAM_H265/PSI_STREAM_AAC, see more @mpeg-ts-proto.h
+/// @param[in] codecid PSI_STREAM_H264/PSI_STREAM_H265/PSI_STREAM_H266/PSI_STREAM_AAC, see more @mpeg-ts-proto.h
 /// @param[in] extradata itu h.222.0 program and program element descriptors, NULL for H.264/H.265/AAC
 /// @param[in] bytes extradata size in byte
 /// @return <=0-error, >0-audio/video stream id
@@ -69,11 +75,19 @@ int ps_muxer_add_stream(struct ps_muxer_t* muxer, int codecid, const void* extra
 int ps_muxer_input(struct ps_muxer_t* muxer, int stream, int flags, int64_t pts, int64_t dts, const void* data, size_t bytes);
 
 
+/// @param[in] codecid 0-unknown, other-enum EPSI_STREAM_TYPE, see more @mpeg-ts-proto.h
+/// @return 0-ok, other-error
 typedef int (*ps_demuxer_onpacket)(void* param, int stream, int codecid, int flags, int64_t pts, int64_t dts, const void* data, size_t bytes);
 
 struct ps_demuxer_t; 
 struct ps_demuxer_t* ps_demuxer_create(ps_demuxer_onpacket onpacket, void* param);
 int ps_demuxer_destroy(struct ps_demuxer_t* demuxer);
+
+/// ps_demuxer_input return consumed bytes, the remain data MUST save and merge with next packet
+/// int n = ps_demuxer_input(demuxer, data, bytes);
+/// if(n >= 0 && n < bytes)
+///		memcpy(NEXTBUFFER, data + n, bytes - n);
+/// 
 /// @return >=0-consume bytes, <0-error
 int ps_demuxer_input(struct ps_demuxer_t* demuxer, const uint8_t* data, size_t bytes);
 

@@ -45,6 +45,9 @@
     <ClInclude Include="include\mov-udta.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="include\mp4-writer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="source\mov-reader.c">
@@ -159,6 +162,12 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="source\mov-udta.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="source\fmp4-reader.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="source\mov-vvc.c">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

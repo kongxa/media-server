@@ -24,7 +24,7 @@ extern "C" {
 #define SIP_METHOD_PRACK		"PRACK" // rfc3262
 #define SIP_METHOD_INFO			"INFO" // rfc2976/rfc6086
 #define SIP_METHOD_REFER		"REFER" // rfc3515
-#define SIP_METHOD_MESSAGE		"MESSAGE" // rfc3248
+#define SIP_METHOD_MESSAGE		"MESSAGE" // rfc3428
 #define SIP_METHOD_SUBSCRIBE	"SUBSCRIBE" // rfc4660/rfc6665
 #define SIP_METHOD_NOTIFY		"NOTIFY" // rfc4660/rfc6665
 #define SIP_METHOD_PUBLISH		"PUBLISH" // rfc3903
@@ -62,6 +62,8 @@ extern "C" {
 
 
 #define SIP_OPTION_TAG_100REL	"100rel"  // rfc3262
+
+#define SIP_HEADER_USER_AGENT "ireader/media-server"
 
 enum { SIP_MESSAGE_REQUEST = 0, SIP_MESSAGE_REPLY = 1 };
 struct sip_message_t

@@ -1,4 +1,4 @@
-#include "mpeg-ts-proto.h"
+#include "mpeg-proto.h"
 #include "mpeg-util.h"
 
 void pcr_write(uint8_t *ptr, int64_t pcr)
@@ -20,12 +20,17 @@ int mpeg_stream_type_video(int codecid)
     {
     case PSI_STREAM_H264:
     case PSI_STREAM_H265:
+    case PSI_STREAM_H266:
     case PSI_STREAM_MPEG1:
     case PSI_STREAM_MPEG2:
     case PSI_STREAM_MPEG4:
     case PSI_STREAM_VIDEO_VC1:
     case PSI_STREAM_VIDEO_SVAC:
     case PSI_STREAM_VIDEO_DIRAC:
+    case PSI_STREAM_VIDEO_CAVS:
+    case PSI_STREAM_VP8:
+    case PSI_STREAM_VP9:
+    case PSI_STREAM_AV1:
         return 1;
     default:
         return 0;

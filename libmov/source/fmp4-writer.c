@@ -17,6 +17,14 @@ struct fmp4_writer_t
 	uint32_t sn; // sample sn
 };
 
+static int fmp4_write_app(struct mov_t* mov)
+{
+	mov_buffer_w32(&mov->io, 8 + strlen(MOV_APP)); /* size */
+	mov_buffer_write(&mov->io, "free", 4);
+	mov_buffer_write(&mov->io, MOV_APP, strlen(MOV_APP));
+	return 0;
+}
+
 static size_t fmp4_write_mvex(struct mov_t* mov)
 {
 	int i;
@@ -28,7 +36,7 @@ static size_t fmp4_write_mvex(struct mov_t* mov)
 	mov_buffer_w32(&mov->io, 0); /* size */
 	mov_buffer_write(&mov->io, "mvex", 4);
 
-	//size += fmp4_write_mehd(mov);
+	size += mov_write_mehd(mov);
 	for (i = 0; i < mov->track_count; i++)
 	{
 		mov->track = mov->tracks + i;
@@ -209,7 +217,7 @@ static int fmp4_add_fragment_entry(struct mov_track_t* track, uint64_t time, uin
 	if (track->frag_count >= track->frag_capacity)
 	{
 		void* p = realloc(track->frags, sizeof(struct mov_fragment_t) * (track->frag_capacity + 64));
-		if (!p) return ENOMEM;
+		if (!p) return -ENOMEM;
 		track->frags = p;
 		track->frag_capacity += 64;
 	}
@@ -232,29 +240,23 @@ static int fmp4_write_fragment(struct fmp4_writer_t* writer)
 		return 0; // empty
 
 	// write moov
-	if (!writer->has_moov)
-	{
-		// write ftyp/stype
-		if (mov->flags & MOV_FLAG_SEGMENT)
-		{
-			mov_write_styp(mov);
-		}
-		else
-		{
-			mov_write_ftyp(mov);
-			fmp4_write_moov(mov);
-		}
-
-		writer->has_moov = 1;
-	}
-
 	if (mov->flags & MOV_FLAG_SEGMENT)
 	{
+		// write stype
+		mov_write_styp(mov);
+
 		// ISO/IEC 23009-1:2014(E) 6.3.4.2 General format type (p93)
 		// Each Media Segment may contain one or more 'sidx' boxes. 
 		// If present, the first 'sidx' box shall be placed before any 'moof' box 
 		// and the first Segment Index box shall document the entire Segment.
 		fmp4_write_sidx(mov);
+	}
+	else if (!writer->has_moov)
+	{
+		mov_write_ftyp(mov);
+		fmp4_write_app(mov);
+		fmp4_write_moov(mov);
+		writer->has_moov = 1;
 	}
 
 	// moof
@@ -269,7 +271,7 @@ static int fmp4_write_fragment(struct fmp4_writer_t* writer)
 	for (i = 0; i < mov->track_count; i++)
 	{
 		mov->track = mov->tracks + i;
-		if (mov->track->sample_count > 0)
+		if (mov->track->sample_count > 0 && 0 == (mov->flags & MOV_FLAG_SEGMENT))
 			fmp4_add_fragment_entry(mov->track, mov->track->samples[0].dts, mov->moof_offset);
 
 		// hack: write sidx referenced_size
@@ -331,7 +333,7 @@ static int fmp4_writer_init(struct mov_t* mov)
 		mov->ftyp.compatible_brands[1] = MOV_BRAND_MP42;
 		mov->ftyp.compatible_brands[2] = MOV_BRAND_MSDH;
 		mov->ftyp.compatible_brands[3] = MOV_BRAND_MSIX;
-		mov->ftyp.compatible_brands[4] = MOV_BRAND_ISO5; // default©\base©\is©\moof flag
+		mov->ftyp.compatible_brands[4] = MOV_BRAND_ISO5; // defaultï¿½\baseï¿½\isï¿½\moof flag
 		mov->ftyp.compatible_brands[5] = MOV_BRAND_ISO6; // styp
 		mov->header = 0;
 	}
@@ -344,7 +346,7 @@ static int fmp4_writer_init(struct mov_t* mov)
 		mov->ftyp.compatible_brands[1] = MOV_BRAND_MP42;
 		mov->ftyp.compatible_brands[2] = MOV_BRAND_AVC1;
 		mov->ftyp.compatible_brands[3] = MOV_BRAND_DASH;
-		mov->ftyp.compatible_brands[4] = MOV_BRAND_ISO5; // default©\base©\is©\moof flag
+		mov->ftyp.compatible_brands[4] = MOV_BRAND_ISO5; // defaultï¿½\baseï¿½\isï¿½\moof flag
 		mov->header = 0;
 	}
 	return 0;
@@ -382,6 +384,16 @@ void fmp4_writer_destroy(struct fmp4_writer_t* writer)
 
 	fmp4_writer_save_segment(writer);
 
+	// write mfra
+	if (0 == (mov->flags & MOV_FLAG_SEGMENT))
+	{
+		fmp4_write_mfra(mov);
+		for (i = 0; i < mov->track_count; i++)
+			mov->tracks[i].frag_count = 0; // don't free frags memory
+	}
+
+	// mov_buffer_error(&mov->io);
+
 	for (i = 0; i < mov->track_count; i++)
         mov_free_track(mov->tracks + i);
 	if (mov->tracks)
@@ -407,7 +419,9 @@ int fmp4_writer_write(struct fmp4_writer_t* writer, int idx, const void* data, s
     track->turn_last_duration = track->turn_last_duration > 0 ? track->turn_last_duration * 7 / 8 + duration / 8 : duration;
 #endif
     
-	if (MOV_VIDEO == track->handler_type && (flags & MOV_AV_FLAG_KEYFREAME) )
+	// 1. force segment or
+	// 2. video key frame
+	if (0 == (flags & MOV_AV_FLAG_SEGMENT_DISABLE) && (0 != (flags & MOV_AV_FLAG_SEGMENT_FORCE) || (MOV_VIDEO == track->handler_type && (flags & MOV_AV_FLAG_KEYFREAME)))  )
 		fmp4_write_fragment(writer); // fragment per video keyframe
 
 	if (track->sample_count + 1 >= track->sample_offset)
@@ -434,12 +448,12 @@ int fmp4_writer_write(struct fmp4_writer_t* writer, int idx, const void* data, s
 		return -ENOMEM;
 	memcpy(sample->data, data, bytes);
 
-    if (INT64_MIN == track->start_dts)
-        track->start_dts = sample->dts;
+	if (INT64_MIN == track->start_dts)
+		track->start_dts = sample->dts;
 	writer->mdat_size += bytes; // update media data size
 	track->sample_count += 1;
     track->last_dts = sample->dts;
-	return 0;
+	return mov_buffer_error(&writer->mov.io);
 }
 
 int fmp4_writer_add_audio(struct fmp4_writer_t* writer, uint8_t object, int channel_count, int bits_per_sample, int sample_rate, const void* extra_data, size_t extra_data_size)
@@ -502,23 +516,22 @@ int fmp4_writer_add_udta(fmp4_writer_t* writer, const void* data, size_t size)
 
 int fmp4_writer_save_segment(fmp4_writer_t* writer)
 {
-	int i;
-	struct mov_t* mov;
-	mov = &writer->mov;
+	//int i;
+	//struct mov_t* mov;
+	//mov = &writer->mov;
 
 	// flush fragment
-	fmp4_write_fragment(writer);
-	writer->has_moov = 0; // clear moov flags
+	return fmp4_write_fragment(writer);
 
-	// write mfra
-	if (0 == (mov->flags & MOV_FLAG_SEGMENT))
-	{
-		fmp4_write_mfra(mov);
-		for (i = 0; i < mov->track_count; i++)
-			mov->tracks[i].frag_count = 0; // don't free frags memory
-	}
+	//// write mfra
+	//if (0 == (mov->flags & MOV_FLAG_SEGMENT))
+	//{
+	//	fmp4_write_mfra(mov);
+	//	for (i = 0; i < mov->track_count; i++)
+	//		mov->tracks[i].frag_count = 0; // don't free frags memory
+	//}
 
-	return mov_buffer_error(&mov->io);
+	//return mov_buffer_error(&mov->io);
 }
 
 int fmp4_writer_init_segment(fmp4_writer_t* writer)
@@ -527,5 +540,6 @@ int fmp4_writer_init_segment(fmp4_writer_t* writer)
 	mov = &writer->mov;
 	mov_write_ftyp(mov);
 	fmp4_write_moov(mov);
+	writer->has_moov = 1;
 	return mov_buffer_error(&mov->io);
 }

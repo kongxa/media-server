@@ -20,7 +20,7 @@ static inline void be_write_uint32(uint8_t* ptr, uint32_t val)
 	ptr[3] = (uint8_t)(val & 0xFF);
 }
 
-int flv_header_read(struct flv_header_t* flv, const uint8_t* buf, int len)
+int flv_header_read(struct flv_header_t* flv, const uint8_t* buf, size_t len)
 {
 	if (len < FLV_HEADER_SIZE || 'F' != buf[0] || 'L' != buf[1] || 'V' != buf[2])
 	{
@@ -41,7 +41,7 @@ int flv_header_read(struct flv_header_t* flv, const uint8_t* buf, int len)
 	return FLV_HEADER_SIZE;
 }
 
-int flv_tag_header_read(struct flv_tag_header_t* tag, const uint8_t* buf, int len)
+int flv_tag_header_read(struct flv_tag_header_t* tag, const uint8_t* buf, size_t len)
 {
 	if (len < FLV_TAG_HEADER_SIZE)
 	{
@@ -55,25 +55,26 @@ int flv_tag_header_read(struct flv_tag_header_t* tag, const uint8_t* buf, int le
 	assert(FLV_TYPE_VIDEO == tag->type || FLV_TYPE_AUDIO == tag->type || FLV_TYPE_SCRIPT == tag->type);
 
 	// DataSize
-	tag->size = (buf[1] << 16) | (buf[2] << 8) | buf[3];
+	tag->size = ((uint32_t)buf[1] << 16) | ((uint32_t)buf[2] << 8) | buf[3];
 
 	// TimestampExtended | Timestamp
-	tag->timestamp = (buf[4] << 16) | (buf[5] << 8) | buf[6] | (buf[7] << 24);
+	tag->timestamp = ((uint32_t)buf[4] << 16) | ((uint32_t)buf[5] << 8) | buf[6] | ((uint32_t)buf[7] << 24);
 
 	// StreamID Always 0
-	tag->streamId = (buf[8] << 16) | (buf[9] << 8) | buf[10];
+	tag->streamId = ((uint32_t)buf[8] << 16) | ((uint32_t)buf[9] << 8) | buf[10];
 	//assert(0 == tag->streamId);
 
 	return FLV_TAG_HEADER_SIZE;
 }
 
-int flv_audio_tag_header_read(struct flv_audio_tag_header_t* audio, const uint8_t* buf, int len)
+int flv_audio_tag_header_read(struct flv_audio_tag_header_t* audio, const uint8_t* buf, size_t len)
 {
 	assert(len > 0);
 	audio->codecid = (buf[0] & 0xF0) /*>> 4*/;
 	audio->rate = (buf[0] & 0x0C) >> 2;
 	audio->bits = (buf[0] & 0x02) >> 1;
 	audio->channels = buf[0] & 0x01;
+	audio->avpacket = FLV_AVPACKET;
 
 	if (FLV_AUDIO_AAC == audio->codecid || FLV_AUDIO_OPUS == audio->codecid)
 	{
@@ -92,19 +93,20 @@ int flv_audio_tag_header_read(struct flv_audio_tag_header_t* audio, const uint8_
 	}
 }
 
-int flv_video_tag_header_read(struct flv_video_tag_header_t* video, const uint8_t* buf, int len)
+int flv_video_tag_header_read(struct flv_video_tag_header_t* video, const uint8_t* buf, size_t len)
 {
 	assert(len > 0);
 	video->keyframe = (buf[0] & 0xF0) >> 4;
 	video->codecid = (buf[0] & 0x0F);
+	video->avpacket = FLV_AVPACKET;
 
-	if (FLV_VIDEO_H264 == video->codecid || FLV_VIDEO_H265 == video->codecid || FLV_VIDEO_AV1 == video->codecid)
+	if (FLV_VIDEO_H264 == video->codecid || FLV_VIDEO_H265 == video->codecid || FLV_VIDEO_H266 == video->codecid || FLV_VIDEO_AV1 == video->codecid)
 	{
 		if (len < 5)
 			return -1;
 
 		video->avpacket = buf[1]; // AVCPacketType
-		video->cts = (buf[2] << 16) | (buf[3] << 8) | buf[4];
+		video->cts = ((uint32_t)buf[2] << 16) | ((uint32_t)buf[3] << 8) | buf[4];
 		//if (video->cts >= (1 << 23)) video->cts -= (1 << 24);
 		video->cts = (video->cts + 0xFF800000) ^ 0xFF800000; // signed 24-integer
 		assert(FLV_SEQUENCE_HEADER == video->avpacket || FLV_AVPACKET == video->avpacket || FLV_END_OF_SEQUENCE == video->avpacket);
@@ -116,13 +118,13 @@ int flv_video_tag_header_read(struct flv_video_tag_header_t* video, const uint8_
 	}
 }
 
-int flv_data_tag_header_read(const uint8_t* buf, int len)
+int flv_data_tag_header_read(const uint8_t* buf, size_t len)
 {
 	(void)buf;
-	return len;
+	return (int)len;
 }
 
-int flv_header_write(int audio, int video, uint8_t* buf, int len)
+int flv_header_write(int audio, int video, uint8_t* buf, size_t len)
 {
 	if (len < FLV_HEADER_SIZE)
 	{
@@ -139,7 +141,7 @@ int flv_header_write(int audio, int video, uint8_t* buf, int len)
 	return FLV_HEADER_SIZE;
 }
 
-int flv_tag_header_write(const struct flv_tag_header_t* tag, uint8_t* buf, int len)
+int flv_tag_header_write(const struct flv_tag_header_t* tag, uint8_t* buf, size_t len)
 {
 	if (len < FLV_TAG_HEADER_SIZE)
 	{
@@ -170,9 +172,9 @@ int flv_tag_header_write(const struct flv_tag_header_t* tag, uint8_t* buf, int l
 	return FLV_TAG_HEADER_SIZE;
 }
 
-int flv_audio_tag_header_write(const struct flv_audio_tag_header_t* audio, uint8_t* buf, int len)
+int flv_audio_tag_header_write(const struct flv_audio_tag_header_t* audio, uint8_t* buf, size_t len)
 {
-	if (len < 1 + ((FLV_AUDIO_AAC == audio->codecid || FLV_AUDIO_OPUS == audio->codecid)? 1 : 0))
+	if ((int)len < 1 + ((FLV_AUDIO_AAC == audio->codecid || FLV_AUDIO_OPUS == audio->codecid)? 1 : 0))
 		return -1;
 
 	if (FLV_AUDIO_AAC == audio->codecid || FLV_AUDIO_OPUS == audio->codecid)
@@ -189,14 +191,14 @@ int flv_audio_tag_header_write(const struct flv_audio_tag_header_t* audio, uint8
 	}
 }
 
-int flv_video_tag_header_write(const struct flv_video_tag_header_t* video, uint8_t* buf, int len)
+int flv_video_tag_header_write(const struct flv_video_tag_header_t* video, uint8_t* buf, size_t len)
 {
 	if (len < 1)
 		return -1;
 
 	buf[0] = (video->keyframe << 4) /*FrameType*/ | (video->codecid & 0x0F) /*CodecID*/;
 
-	if (FLV_VIDEO_H264 == video->codecid || FLV_VIDEO_H265 == video->codecid || FLV_VIDEO_AV1 == video->codecid)
+	if (FLV_VIDEO_H264 == video->codecid || FLV_VIDEO_H265 == video->codecid || FLV_VIDEO_H266 == video->codecid || FLV_VIDEO_AV1 == video->codecid)
 	{
 		assert(FLV_SEQUENCE_HEADER == video->avpacket || FLV_AVPACKET == video->avpacket || FLV_END_OF_SEQUENCE == video->avpacket);
 		if (len < 5)
@@ -212,14 +214,14 @@ int flv_video_tag_header_write(const struct flv_video_tag_header_t* video, uint8
 	return 1;
 }
 
-int flv_data_tag_header_write(uint8_t* buf, int len)
+int flv_data_tag_header_write(uint8_t* buf, size_t len)
 {
     (void)buf;
     (void)len;
 	return 0;
 }
 
-int flv_tag_size_read(const uint8_t* buf, int len, uint32_t* size)
+int flv_tag_size_read(const uint8_t* buf, size_t len, uint32_t* size)
 {
     if(len < 4)
         return -1;
@@ -227,7 +229,7 @@ int flv_tag_size_read(const uint8_t* buf, int len, uint32_t* size)
     return 4;
 }
 
-int flv_tag_size_write(uint8_t* buf, int len, uint32_t size)
+int flv_tag_size_write(uint8_t* buf, size_t len, uint32_t size)
 {
     if(len < 4)
         return -1;

@@ -12,11 +12,19 @@
 #define AV_TRACK_TIMEBASE 1000
 
 //#define MOV_READER_BOX_TREE 1
+//#define MOV_READER_FMP4_FAST 1
+
+#define MOV_READER_FLAG_FMP4_FAST 0x01
 
 struct mov_reader_t
 {
+	int flags;
+	int have_read_mfra;
+	
 	struct mov_t mov;
 };
+
+#define MOV_READER_FROM_MOV(ptr) ((struct mov_reader_t*)((char*)(ptr)-(ptrdiff_t)(&((struct mov_reader_t*)0)->mov)))
 
 struct mov_parse_t
 {
@@ -66,7 +74,7 @@ static int mov_index_build(struct mov_track_t* track)
 	}
 
 	p = realloc(stbl->stss, sizeof(stbl->stss[0]) * stbl->stss_count);
-	if (!p) return ENOMEM;
+	if (!p) return -ENOMEM;
 	stbl->stss = p;
 
 	for (j = i = 0; i < track->sample_count && j < stbl->stss_count; i++)
@@ -159,13 +167,36 @@ static int mov_read_moof(struct mov_t* mov, const struct mov_box_t* box)
 	return mov_reader_box(mov, box);
 }
 
+static int mov_read_mfra(struct mov_t* mov, const struct mov_box_t* box)
+{
+	int r;
+	struct mov_reader_t* reader;
+	reader = MOV_READER_FROM_MOV(mov);
+	r = mov_reader_box(mov, box);
+	reader->have_read_mfra = 1;
+	return r;
+}
+
 // 8.8.11 Movie Fragment Random Access Offset Box (p75)
 static int mov_read_mfro(struct mov_t* mov, const struct mov_box_t* box)
 {
 	(void)box;
 	mov_buffer_r32(&mov->io); /* version & flags */
-	mov_buffer_r32(&mov->io); /* size */
+	mov->mfro = mov_buffer_r32(&mov->io); /* size */
 	return mov_buffer_error(&mov->io);
+}
+
+int mov_reader_root(struct mov_t* mov)
+{
+	struct mov_box_t box;
+
+	box.type = MOV_ROOT;
+	box.size = UINT64_MAX;
+#if defined(DEBUG) || defined(_DEBUG)
+	box.level = 0;
+#endif
+
+	return mov_reader_box(mov, &box);
 }
 
 static int mov_read_default(struct mov_t* mov, const struct mov_box_t* box)
@@ -199,7 +230,7 @@ static struct mov_parse_t s_mov_parse_table[] = {
 	{ MOV_TAG('m', 'd', 'i', 'a'), MOV_TRAK, mov_read_default },
 	{ MOV_TAG('m', 'e', 'h', 'd'), MOV_MVEX, mov_read_mehd },
 	{ MOV_TAG('m', 'f', 'h', 'd'), MOV_MOOF, mov_read_mfhd },
-	{ MOV_TAG('m', 'f', 'r', 'a'), MOV_ROOT, mov_read_default },
+	{ MOV_TAG('m', 'f', 'r', 'a'), MOV_ROOT, mov_read_mfra },
 	{ MOV_TAG('m', 'f', 'r', 'o'), MOV_MFRA, mov_read_mfro },
 	{ MOV_TAG('m', 'i', 'n', 'f'), MOV_MDIA, mov_read_default },
 	{ MOV_TAG('m', 'o', 'o', 'v'), MOV_ROOT, mov_read_default },
@@ -243,8 +274,10 @@ int mov_reader_box(struct mov_t* mov, const struct mov_box_t* parent)
 	int i;
 	uint64_t bytes = 0;
 	struct mov_box_t box;
+	struct mov_reader_t* reader;
 	int (*parse)(struct mov_t* mov, const struct mov_box_t* box);
 
+	reader = MOV_READER_FROM_MOV(mov);
 	while (bytes + 8 < parent->size && 0 == mov_buffer_error(&mov->io))
 	{
 		uint64_t n = 8;
@@ -289,7 +322,7 @@ int mov_reader_box(struct mov_t* mov, const struct mov_box_t* parent)
 			if (s_mov_parse_table[i].type == box.type)
 			{
 				// Apple QuickTime minf also has hdlr
-				if(!s_mov_parse_table[i].parent || s_mov_parse_table[i].parent == parent->type)
+				if(!s_mov_parse_table[i].parent || MOV_ROOT == parent->type || s_mov_parse_table[i].parent == parent->type)
 					parse = s_mov_parse_table[i].parse;
 			}
 		}
@@ -310,31 +343,41 @@ int mov_reader_box(struct mov_t* mov, const struct mov_box_t* parent)
 			assert(pos2 - pos == box.size);
 			mov_buffer_skip(&mov->io, box.size - (pos2 - pos));
 		}
+
+		// fmp4: read one-fragment only
+		if ((reader->flags & MOV_READER_FLAG_FMP4_FAST) && MOV_TAG('m', 'o', 'o', 'f') == box.type)
+		{
+			if (!reader->have_read_mfra)
+			{
+				mov_fragment_seek_read_mfra(mov);
+				reader->have_read_mfra = 1; // force, seek once only
+			}
+
+			// skip fast mode, fallback to read all
+			if(mov->mfro > 0)
+				break;
+		}
 	}
 
 	return mov_buffer_error(&mov->io) ? -1 : 0;
 }
 
-static int mov_reader_init(struct mov_t* mov)
+static int mov_reader_init(struct mov_reader_t* reader)
 {
 	int i, r;
-	struct mov_box_t box;
+	struct mov_t* mov;
 	struct mov_track_t* track;
 
-	box.type = MOV_ROOT;
-	box.size = UINT64_MAX;
-#if defined(DEBUG) || defined(_DEBUG)
-	box.level = 0;
-#endif
-	r = mov_reader_box(mov, &box);
-	if (0 != r) return r;
-	
+	mov = &reader->mov;
+	r = mov_reader_root(mov);
+	if (0 != r) { /*return r;*/ }  // ignore file read error(for streaming file)
+
 	for (i = 0; i < mov->track_count; i++)
 	{
 		track = mov->tracks + i;
 		mov_index_build(track);
-		track->sample_offset = 0; // reset
-
+		//track->sample_offset = 0; // reset
+		
 		// fragment mp4
 		if (0 == track->mdhd.duration && track->sample_count > 0)
 			track->mdhd.duration = track->samples[track->sample_count - 1].dts - track->samples[0].dts;
@@ -354,6 +397,10 @@ struct mov_reader_t* mov_reader_create(const struct mov_buffer_t* buffer, void* 
 	if (NULL == reader)
 		return NULL;
 
+#if defined(MOV_READER_FMP4_FAST)
+	reader->flags |= MOV_READER_FLAG_FMP4_FAST;
+#endif
+
 	// ISO/IEC 14496-12:2012(E) 4.3.1 Definition (p17)
 	// Files with no file-type box should be read as if they contained an FTYP box 
 	// with Major_brand='mp41', minor_version=0, and the single compatible brand 'mp41'.
@@ -364,7 +411,7 @@ struct mov_reader_t* mov_reader_create(const struct mov_buffer_t* buffer, void* 
 
 	reader->mov.io.param = param;
 	memcpy(&reader->mov.io.io, buffer, sizeof(reader->mov.io.io));
-	if (0 != mov_reader_init(&reader->mov))
+	if (0 != mov_reader_init(reader))
 	{
 		mov_reader_destroy(reader);
 		return NULL;
@@ -376,9 +423,9 @@ void mov_reader_destroy(struct mov_reader_t* reader)
 {
 	int i;
 	for (i = 0; i < reader->mov.track_count; i++)
-        mov_free_track(reader->mov.tracks + i);
-    if (reader->mov.tracks)
-        free(reader->mov.tracks);
+		mov_free_track(reader->mov.tracks + i);
+	if (reader->mov.tracks)
+		free(reader->mov.tracks);
 	free(reader);
 }
 
@@ -409,32 +456,70 @@ static struct mov_track_t* mov_reader_next(struct mov_reader_t* reader)
 	return track;
 }
 
-int mov_reader_read(struct mov_reader_t* reader, void* buffer, size_t bytes, mov_reader_onread onread, void* param)
+int mov_reader_read2(struct mov_reader_t* reader, mov_reader_onread2 onread, void* param)
 {
+	void* ptr;
 	struct mov_track_t* track;
 	struct mov_sample_t* sample;
 
+FMP4_NEXT_FRAGMENT:
 	track = mov_reader_next(reader);
 	if (NULL == track || 0 == track->mdhd.timescale)
 	{
+		if ((MOV_READER_FLAG_FMP4_FAST & reader->flags) && reader->have_read_mfra
+			&& 0 == mov_fragment_read_next_moof(&reader->mov))
+		{
+			goto FMP4_NEXT_FRAGMENT;
+		}
 		return 0; // EOF
 	}
 
 	assert(track->sample_offset < track->sample_count);
 	sample = &track->samples[track->sample_offset];
-	if (bytes < sample->bytes)
-		return ENOMEM;
+	assert(sample->sample_description_index > 0);
+	ptr = onread(param, track->tkhd.track_ID, /*sample->sample_description_index-1,*/ sample->bytes, sample->pts * 1000 / track->mdhd.timescale, sample->dts * 1000 / track->mdhd.timescale, sample->flags);
+	if(!ptr)
+		return -ENOMEM;
 
 	mov_buffer_seek(&reader->mov.io, sample->offset);
-	mov_buffer_read(&reader->mov.io, buffer, sample->bytes);
+	mov_buffer_read(&reader->mov.io, ptr, sample->bytes);
 	if (mov_buffer_error(&reader->mov.io))
 	{
+		// TODO: user free buffer
 		return mov_buffer_error(&reader->mov.io);
 	}
 
 	track->sample_offset++; //mark as read
-	assert(sample->sample_description_index > 0);
-	onread(param, track->tkhd.track_ID, /*sample->sample_description_index-1,*/ buffer, sample->bytes, sample->pts * 1000 / track->mdhd.timescale, sample->dts * 1000 / track->mdhd.timescale, sample->flags);
+	return 1;
+}
+
+static void* mov_reader_read_helper(void* param, uint32_t track, size_t bytes, int64_t pts, int64_t dts, int flags)
+{
+	struct mov_sample_t* sample;
+	sample = (struct mov_sample_t*)param;
+	if (sample->bytes < bytes)
+		return NULL;
+	
+	sample->pts = pts;
+	sample->dts = dts;
+	sample->flags = flags;
+	sample->bytes = (uint32_t)bytes;
+	sample->sample_description_index = track;
+	return sample->data;
+}
+
+int mov_reader_read(struct mov_reader_t* reader, void* buffer, size_t bytes, mov_reader_onread onread, void* param)
+{
+	int r;
+	struct mov_sample_t sample; // temp
+	//memset(&sample, 0, sizeof(sample));
+	sample.data = buffer;
+	sample.bytes =  (uint32_t)bytes;
+	r = mov_reader_read2(reader, mov_reader_read_helper, &sample);
+	if (r <= 0)
+		return r;
+
+	onread(param, sample.sample_description_index, buffer, sample.bytes, sample.pts, sample.dts, sample.flags);
 	return 1;
 }
 
@@ -442,6 +527,10 @@ int mov_reader_seek(struct mov_reader_t* reader, int64_t* timestamp)
 {
 	int i;
 	struct mov_track_t* track;
+
+	if (reader->have_read_mfra && (MOV_READER_FLAG_FMP4_FAST & reader->flags)
+		&& reader->mov.track_count > 0 && reader->mov.tracks[0].frag_count > 0)
+		return mov_fragment_seek(&reader->mov, timestamp);
 
 	// seek video track(s)
 	for (i = 0; i < reader->mov.track_count; i++)

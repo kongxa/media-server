@@ -24,13 +24,23 @@ inline char flv_type(int type)
 {
 	switch (type)
 	{
-	case FLV_AUDIO_AAC: return 'A';
-	case FLV_AUDIO_MP3: return 'M';
-	case FLV_AUDIO_ASC: return 'a';
-	case FLV_VIDEO_H264: return 'V';
-	case FLV_VIDEO_AVCC: return 'v';
-	case FLV_VIDEO_H265: return 'H';
-	case FLV_VIDEO_HVCC: return 'h';
+	case FLV_AUDIO_ASC:
+	case FLV_AUDIO_OPUS_HEAD:
+		return 'a';
+	case FLV_AUDIO_AAC:
+	case FLV_AUDIO_MP3:
+	case FLV_AUDIO_OPUS:
+		return 'A';
+	case FLV_VIDEO_AVCC:
+	case FLV_VIDEO_HVCC:
+	case FLV_VIDEO_VVCC:
+	case FLV_VIDEO_AV1C:
+		return 'v';
+	case FLV_VIDEO_H264:
+	case FLV_VIDEO_H265:
+	case FLV_VIDEO_H266:
+	case FLV_VIDEO_AV1:
+		return 'V';
 	default: return '*';
 	}
 }
@@ -52,7 +62,7 @@ static int onFLV(void* /*param*/, int codec, const void* data, size_t bytes, uin
 		assert(bytes == get_adts_length((const uint8_t*)data, bytes));
 		fwrite(data, bytes, 1, aac);
 	}
-	else if (FLV_VIDEO_H264 == codec || FLV_VIDEO_H265 == codec)
+	else if (FLV_VIDEO_H264 == codec || FLV_VIDEO_H265 == codec || FLV_VIDEO_H266 == codec || FLV_VIDEO_AV1 == codec)
 	{
 		printf("diff: %03d/%03d %s", (int)(pts - v_pts), (int)(dts - v_dts), flags ? "[I]" : "");
 		v_pts = pts;
@@ -60,11 +70,11 @@ static int onFLV(void* /*param*/, int codec, const void* data, size_t bytes, uin
 
 		fwrite(data, bytes, 1, h264);
 	}
-	else if (FLV_AUDIO_MP3 == codec)
+	else if (FLV_AUDIO_MP3 == codec || FLV_AUDIO_OPUS == codec)
 	{
 		fwrite(data, bytes, 1, aac);
 	}
-	else if (FLV_AUDIO_ASC == codec || FLV_VIDEO_AVCC == codec || FLV_VIDEO_HVCC == codec)
+	else if (FLV_AUDIO_ASC == codec || FLV_AUDIO_OPUS_HEAD == codec  || FLV_VIDEO_AVCC == codec || FLV_VIDEO_HVCC == codec || FLV_VIDEO_VVCC == codec || FLV_VIDEO_AV1C == codec)
 	{
 		// nothing to do
 	}
@@ -75,7 +85,7 @@ static int onFLV(void* /*param*/, int codec, const void* data, size_t bytes, uin
 	else
 	{
 		// nothing to do
-		assert(0);
+		assert(FLV_SCRIPT_METADATA == codec);
 	}
 
 	printf("\n");

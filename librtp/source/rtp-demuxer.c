@@ -40,9 +40,9 @@ static int rtp_onpacket(void* param, const void *packet, int bytes, uint32_t tim
 
 static void rtp_on_rtcp(void* param, const struct rtcp_msg_t* msg)
 {
-    struct rtp_demuxer_t* rtp;
-    rtp = (struct rtp_demuxer_t*)param;
-    if (RTCP_MSG_BYE == msg->type)
+    //struct rtp_demuxer_t* rtp;
+    //rtp = (struct rtp_demuxer_t*)param;
+    if (RTCP_BYE == msg->type)
     {
         printf("finished\n");
         //rtp->onpkt(rtp->param, NULL, 0, 0, 0);
@@ -178,9 +178,13 @@ int rtp_demuxer_input(struct rtp_demuxer_t* rtp, const void* data, int bytes)
     
     if (bytes < 12 || bytes > rtp->max)
         return -EINVAL;
-    pt = ((uint8_t*)data)[1];
 
-    if(pt < RTCP_FIR || pt > RTCP_TOKEN)
+    pt = ((uint8_t*)data)[1];
+    // RFC7983 SRTP: https://tools.ietf.org/html/draft-ietf-avtcore-rfc5764-mux-fixes
+    // http://www.iana.org/assignments/rtp-parameters/rtp-parameters.xhtml#rtp-parameters-4
+    // RFC 5761 (RTCP-mux) states this range for secure RTCP/RTP detection.
+    // RTCP packet types in the ranges 1-191 and 224-254 SHOULD only be used when other values have been exhausted.
+    if(pt < RTCP_FIR || pt > RTCP_LIMIT)
     {
         pkt = rtp_demuxer_alloc(rtp, data, bytes);
         if (!pkt)
@@ -201,10 +205,10 @@ int rtp_demuxer_input(struct rtp_demuxer_t* rtp, const void* data, int bytes)
 
             r = rtp_onreceived(rtp->rtp, pkt + 1, bytes);
             r = rtp_payload_decode_input(rtp->payload, pkt + 1, bytes);
+            rtp_demuxer_freepkt(rtp, pkt);
             if(r < 0)
                 return r;
     
-            rtp_demuxer_freepkt(rtp, pkt);
             pkt = rtp_queue_read(rtp->queue);
         }
     }

@@ -45,6 +45,8 @@ struct sip_message_t* sip_message_create(int mode)
 	sip_uris_init(&msg->record_routers);
 	sip_contacts_init(&msg->contacts);
 	sip_params_init(&msg->headers);
+
+	sip_message_add_header(msg, "User-Agent", SIP_HEADER_USER_AGENT);
 	return msg;
 }
 
@@ -553,7 +555,7 @@ static char* sip_message_routers(const struct sip_message_t* msg, char* p, const
 
 	// METHOD sip:proxy1
 	// Route: <sip:proxy2>,<sip:proxy3;lr>,<sip:proxy4>,<sip:user@remoteua>
-	for (i = strict_router; i < sip_uris_count((struct sip_uris_t*)&msg->routers); i++)
+	for (i = strict_router; i < sip_uris_count((struct sip_uris_t*)&msg->routers) && p < end; i++)
 	{
 		if (p < end) p += snprintf(p, end - p, "\r\n%s: ", SIP_HEADER_ROUTE);
 		if (p < end) p += sip_uri_write(sip_uris_get((struct sip_uris_t*)&msg->routers, i), p, end);
@@ -655,7 +657,7 @@ int sip_message_write(const struct sip_message_t* msg, uint8_t* data, int bytes)
 
 		if (0 == cstrcasecmp(&param->name, "Content-Length") || 0 == cstrcasecmp(&param->name, SIP_HEADER_ABBR_CONTENT_LENGTH))
 		{
-			assert(msg->size == atoi(param->value.p));
+			assert(msg->size == (int)cstrtol(&param->value, NULL, 10));
 			content_length = 1; // has content length
 		}
 
@@ -733,7 +735,7 @@ int sip_message_add_header(struct sip_message_t* msg, const char* name, const ch
 	}
 	else if (0 == strcasecmp(SIP_HEADER_MAX_FORWARDS, name))
 	{
-		msg->maxforwards = (int)strtol(value ? value : "", NULL, 10);
+		msg->maxforwards = (int)strtoul(value ? value : "", NULL, 10);
 	}
 	else if (0 == strcasecmp(SIP_HEADER_VIA, name) || 0 == strcasecmp(SIP_HEADER_ABBR_VIA, name))
 	{
@@ -784,7 +786,7 @@ int sip_message_add_header(struct sip_message_t* msg, const char* name, const ch
 	}
 	else if (0 == strcasecmp(SIP_HEADER_RSEQ, name))
 	{
-		msg->rseq = atoi(header.value.p);
+		msg->rseq = (uint32_t)cstrtol(&header.value, NULL, 10);
 	}
 	else
 	{

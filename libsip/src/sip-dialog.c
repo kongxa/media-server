@@ -58,9 +58,9 @@ int sip_dialog_init_uac(struct sip_dialog_t* dialog, const struct sip_message_t*
 	// header field from the response, taken in reverse order and preserving
 	// all URI parameters.
 	sip_uris_init(&dialog->routers);
-	for (i = sip_uris_count(&msg->routers); i > 0; i--)
+	for (i = sip_uris_count(&msg->record_routers); i > 0; i--)
 	{
-		dialog->ptr = sip_uri_clone(dialog->ptr, end, &uri, sip_uris_get(&msg->routers, i-1));
+		dialog->ptr = sip_uri_clone(dialog->ptr, end, &uri, sip_uris_get(&msg->record_routers, i-1));
 		sip_uris_push(&dialog->routers, &uri);
 	}
 
@@ -98,9 +98,9 @@ int sip_dialog_init_uas(struct sip_dialog_t* dialog, const struct sip_message_t*
 	// parameters. If no Record-Route header field is present in the
 	// request, the route set MUST be set to the empty set.
     sip_uris_init(&dialog->routers);
-    for (i = 0; i < sip_uris_count(&msg->routers); i++)
+    for (i = 0; i < sip_uris_count(&msg->record_routers); i++)
     {
-        dialog->ptr = sip_uri_clone(dialog->ptr, end, &uri, sip_uris_get(&msg->routers, i));
+        dialog->ptr = sip_uri_clone(dialog->ptr, end, &uri, sip_uris_get(&msg->record_routers, i));
         sip_uris_push(&dialog->routers, &uri);
     }
     
@@ -228,6 +228,13 @@ int sip_dialog_remove(struct sip_agent_t* sip, struct sip_dialog_t* dialog)
 	// unlink dialog
 	locker_lock(&sip->locker);
 	//assert(1 == dialog->ref);
+	if (dialog->link.next == NULL)
+	{
+		// fix remove twice
+		locker_unlock(&sip->locker);
+		return -1;
+	}
+
 	list_remove(&dialog->link);
 	locker_unlock(&sip->locker);
 	sip_dialog_release(dialog);
@@ -239,7 +246,7 @@ int sip_dialog_remove2(struct sip_agent_t* sip, const struct cstring_t* callid, 
 	struct sip_dialog_t* dialog;
 	locker_lock(&sip->locker);
 	dialog = sip_dialog_find(sip, callid, local, remote);
-	if (dialog)
+	if (dialog && dialog->link.next)
 		list_remove(&dialog->link);
 	locker_unlock(&sip->locker);
 

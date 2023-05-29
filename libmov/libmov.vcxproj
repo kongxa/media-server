@@ -27,10 +27,12 @@
     <ClInclude Include="include\mov-udta.h" />
     <ClInclude Include="include\mov-writer.h" />
     <ClInclude Include="include\mov-buffer.h" />
+    <ClInclude Include="include\mp4-writer.h" />
     <ClInclude Include="source\mov-internal.h" />
     <ClInclude Include="source\mov-ioutil.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="source\fmp4-reader.c" />
     <ClCompile Include="source\mov-av1.c" />
     <ClCompile Include="source\mov-avc1.c" />
     <ClCompile Include="source\mov-dinf.c" />
@@ -68,6 +70,7 @@
     <ClCompile Include="source\mov-trun.c" />
     <ClCompile Include="source\mov-tx3g.c" />
     <ClCompile Include="source\mov-vpcc.c" />
+    <ClCompile Include="source\mov-vvc.c" />
     <ClCompile Include="source\mov-writer.c" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
@@ -80,26 +83,26 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>

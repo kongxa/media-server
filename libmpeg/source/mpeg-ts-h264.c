@@ -16,7 +16,7 @@
 int mpeg_h264_find_nalu(const uint8_t* p, size_t bytes, size_t* leading)
 {
     size_t i, zeros;
-    for (zeros = i = 0; i + 1 < bytes; i++)
+    for (zeros = i = 0; i + 2 /*naltype + 1-data*/ < bytes; i++)
     {
         if (0x01 == p[i] && zeros >= 2)
         {
@@ -38,7 +38,7 @@ static int mpeg_h264_find_access_unit_delimiter(const uint8_t* p, size_t bytes, 
 {
     int i;
     size_t off;
-    for (off = 0; off < bytes; off += i + 1)
+    for (off = i = 0; off < bytes; off += i) // 00 00 00 01 00 ?
 	{
         i = mpeg_h264_find_nalu(p + off, bytes - off, leading);
         if (-1 == i)
@@ -49,6 +49,28 @@ static int mpeg_h264_find_access_unit_delimiter(const uint8_t* p, size_t bytes, 
 	}
 
 	return -1;
+}
+
+/// @return 0-not find, 1-find ok
+int mpeg_h264_start_with_access_unit_delimiter(const uint8_t* p, size_t bytes)
+{
+    int i;
+    size_t off;
+    uint8_t nalu;
+    for (off = i = 0; off < bytes; off += i)
+    {
+        i = mpeg_h264_find_nalu(p + off, bytes - off, NULL);
+        if (-1 == i)
+            return 0;
+
+        assert(i > 0);
+        nalu = p[i + off] & 0x1f;
+        if (0 == nalu)
+            continue; // 00 00 00 01 00 ?
+        return H264_NAL_AUD == nalu ? 1 : 0;
+    }
+
+    return 0;
 }
 
 int mpeg_h264_find_keyframe(const uint8_t* p, size_t bytes)
@@ -114,16 +136,80 @@ int mpeg_h264_find_new_access_unit(const uint8_t* data, size_t bytes, int* vcl)
         nal_type = p[n] & 0x1f;
         if (*vcl > 0 && mpeg_h264_is_new_access_unit(p + n, end - p - n))
         {
-            return p - data + n - leading;
+            return (int)(p - data + n - leading);
         }
         else if (nal_type > 0 && nal_type < 6)
         {
-            ++* vcl;
+            *vcl = H264_NAL_IDR == nal_type ? 1 : 2;
         }
         else
         {
             // nothing to do
         }
+    }
+
+    return -1;
+}
+
+/// @param[out] codec 1-h264, 2-h265
+/// @return 0-ok, other-error
+int mpeg_h26x_verify(const uint8_t* data, size_t bytes, int* codec)
+{
+    uint32_t h264_flags = 0x01A0U; // sps/pps/idr
+    uint64_t h265_flags = 0x700000000ULL; // vps/sps/pps
+    uint32_t h266_flags = 0xC000U; // <vps/>sps/pps
+
+    int n, count;
+    size_t leading;
+    uint8_t h26x[5][10];
+    const uint8_t* p, * end;
+
+    count = 0;
+    end = data + bytes;
+    for (p = data; p && p < end && count < sizeof(h26x[0])/sizeof(h26x[0][0]); p += n)
+    {
+        n = mpeg_h264_find_nalu(p, end - p, &leading);
+        if (n < 0 || p + n + 1 > end)
+            break;
+
+        h26x[0][count] = p[n] & 0x1f; // h264
+        h26x[1][count] = (p[n] >> 1) & 0x3f; // h265
+        h26x[2][count] = (p[n+1] >> 3) & 0x1f; // h266
+        h26x[3][count] = p[n]; // for mpeg4 vop_start_code
+        h26x[4][count] = p[n+1]; // for mpeg4 vop_coding_type
+        ++count;
+    }
+
+    for(n = 0; n < count; n++)
+    {
+        h264_flags &= ~(1U << h26x[0][n]);
+        h265_flags &= ~(1ULL << h26x[1][n]);
+        h266_flags &= ~(1ULL << h26x[2][n]);
+    }
+    
+    if (0 == h264_flags && 0 != h265_flags && 0 != h266_flags)
+    {
+        // match sps/pps/idr
+        *codec = 1;
+        return 0;
+    }
+    else if (0 == h265_flags && 0 != h264_flags && 0 != h266_flags)
+    {
+        // match vps/sps/pps
+        *codec = 2;
+        return 0;
+    }
+    else if (0 == h266_flags && 0 != h264_flags && 0 != h265_flags)
+    {
+        // match sps/pps
+        *codec = 3;
+        return 0;
+    }
+    else if (0xB0 == h26x[3][0] && 0 == (0x30 & h26x[4][0]))
+    {
+        // match VOP start code
+        *codec = 4;
+        return 0;
     }
 
     return -1;

@@ -10,6 +10,7 @@
 #include "mpeg4-aac.h"
 #include "mpeg4-avc.h"
 #include "mpeg4-hevc.h"
+#include "mpeg4-vvc.h"
 #include "cstringext.h"
 #include "sys/sync.hpp"
 #include "sys/thread.h"
@@ -75,6 +76,7 @@ static int dash_live_onflv(void* param, int codec, const void* data, size_t byte
     struct mpeg4_aac_t aac;
     struct mpeg4_avc_t avc;
     struct mpeg4_hevc_t hevc;
+    struct mpeg4_vvc_t vvc;
     dash_playlist_t* dash = (dash_playlist_t*)param;
 
     switch (codec)
@@ -86,8 +88,14 @@ static int dash_live_onflv(void* param, int codec, const void* data, size_t byte
 
     case FLV_VIDEO_HVCC:
         if (-1 == dash->adapation_video && mpeg4_hevc_decoder_configuration_record_load((const uint8_t*)data, bytes, &hevc) > 0)
-            dash->adapation_video = dash_mpd_add_video_adaptation_set(dash->mpd, dash->name.c_str(), MOV_OBJECT_HEVC, dash->width, dash->height, data, bytes);
+            dash->adapation_video = dash_mpd_add_video_adaptation_set(dash->mpd, dash->name.c_str(), MOV_OBJECT_H265, dash->width, dash->height, data, bytes);
         break;
+
+    case FLV_VIDEO_VVCC:
+        if (-1 == dash->adapation_video && mpeg4_vvc_decoder_configuration_record_load((const uint8_t*)data, bytes, &vvc) > 0)
+            dash->adapation_video = dash_mpd_add_video_adaptation_set(dash->mpd, dash->name.c_str(), MOV_OBJECT_H266, dash->width, dash->height, data, bytes);
+        break;
+
 
     case FLV_AUDIO_ASC:
         if (-1 == dash->adapation_audio && mpeg4_aac_audio_specific_config_load((const uint8_t*)data, bytes, &aac) > 0)
@@ -101,9 +109,8 @@ static int dash_live_onflv(void* param, int codec, const void* data, size_t byte
         return dash_mpd_input(dash->mpd, dash->adapation_audio, data, bytes, pts, dts, 0);
 
     case FLV_VIDEO_H264:
-        return dash_mpd_input(dash->mpd, dash->adapation_video, data, bytes, pts, dts, flags ? MOV_AV_FLAG_KEYFREAME : 0);
-
     case FLV_VIDEO_H265:
+    case FLV_VIDEO_H266:
         return dash_mpd_input(dash->mpd, dash->adapation_video, data, bytes, pts, dts, flags ? MOV_AV_FLAG_KEYFREAME : 0);
 
     default:
@@ -138,7 +145,7 @@ static int dash_live_worker(const char* file, dash_playlist_t* dash)
 
             timestamp += diff;
             s_timestamp = timestamp > s_timestamp ? timestamp : s_timestamp;
-            r = flv_parser_input(type, dash->packet, taglen, timestamp, dash_live_onflv, dash);
+            r = flv_parser_tag(type, dash->packet, taglen, timestamp, dash_live_onflv, dash);
             if (0 != r)
             {
                 assert(0);
@@ -155,8 +162,6 @@ static int dash_live_worker(const char* file, dash_playlist_t* dash)
 static int dash_server_mpd(http_session_t* session, dash_playlist_t* dash)
 {
 	http_server_set_header(session, "Content-Type", "application/xml+dash");
-	http_server_set_header(session, "Access-Control-Allow-Origin", "*");
-	http_server_set_header(session, "Access-Control-Allow-Methods", "GET, POST, PUT");
     AutoThreadLocker locker(s_locker);
 	http_server_reply(session, 200, dash->playlist, strlen(dash->playlist));
 	return 0;
@@ -168,6 +173,12 @@ static int dash_server_onlive(void* dash, http_session_t* session, const char* /
     int r = path_concat(path + 6 /* /live/ */, LOCALPATH, fullpath);
 	printf("live: %s\n", fullpath);
 
+    // HTTP CORS
+    http_server_set_header(session, "Access-Control-Allow-Origin", "*");
+    http_server_set_header(session, "Access-Control-Allow-Headers", "*");
+    http_server_set_header(session, "Access-Control-Allow-Credentials", "true");
+    http_server_set_header(session, "Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS, CONNECT");
+
 	const char* name = path_basename(fullpath);
 	if (strendswith(name, ".mpd"))
 	{
@@ -176,8 +187,6 @@ static int dash_server_onlive(void* dash, http_session_t* session, const char* /
 	else if (path_testfile(name))
 	{
 		// cross domain
-		http_server_set_header(session, "Access-Control-Allow-Origin", "*");
-		http_server_set_header(session, "Access-Control-Allow-Methods", "GET, POST, PUT");
 		return http_server_sendfile(session, name, NULL, NULL);
 	}
 
@@ -191,6 +200,12 @@ static int dash_server_onvod(void* /*dash*/, http_session_t* session, const char
     int r = path_concat(path + 5 /* /vod/ */, LOCALPATH, fullpath);
 	printf("vod: %s\n", fullpath);
 
+    // HTTP CORS
+    http_server_set_header(session, "Access-Control-Allow-Origin", "*");
+    http_server_set_header(session, "Access-Control-Allow-Headers", "*");
+    http_server_set_header(session, "Access-Control-Allow-Credentials", "true");
+    http_server_set_header(session, "Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS, CONNECT");
+
 	if (0 == r && path_testfile(fullpath))
 	{
 		// MIME
@@ -202,11 +217,6 @@ static int dash_server_onvod(void* /*dash*/, http_session_t* session, const char
             http_server_set_header(session, "content-type", "audio/mp4");
 
 		//http_server_set_header(session, "Transfer-Encoding", "chunked");
-
-		// cross domain
-		http_server_set_header(session, "Access-Control-Allow-Origin", "*");
-		http_server_set_header(session, "Access-Control-Allow-Methods", "GET, POST, PUT");
-
 		return http_server_sendfile(session, fullpath, NULL, NULL);
 	}
 

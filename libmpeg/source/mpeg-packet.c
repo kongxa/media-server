@@ -1,6 +1,4 @@
-#include "mpeg-pes-proto.h"
-#include "mpeg-ts-proto.h"
-#include "mpeg-util.h"
+#include "mpeg-pes-internal.h"
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
@@ -54,7 +52,7 @@ static int mpeg_packet_h264_h265_filter(uint16_t program, uint16_t stream, struc
         if (PSI_STREAM_H264 == pkt->codecid ? 9 == (data[off + i] & 0x1f) : 35 == ((data[off + i] >> 1) & 0x3f))
             continue;
 
-        i -= leading; // rewind to 0x00 00 00 01
+        i -= (int)leading; // rewind to 0x00 00 00 01
         break;
     }
 
@@ -62,19 +60,28 @@ static int mpeg_packet_h264_h265_filter(uint16_t program, uint16_t stream, struc
     return handler(param, program, stream, pkt->codecid, pkt->flags, pkt->pts, pkt->dts, data + off + i, size - off - i);
 }
 
-static int mpeg_packet_h264_h265(struct packet_t* pkt, const struct pes_t* pes, size_t size, pes_packet_handler handler, void* param)
+static int mpeg_packet_h26x(struct packet_t* pkt, const struct pes_t* pes, size_t size, pes_packet_handler handler, void* param)
 {
     int r, n;
     const uint8_t* p, *end, *data;
     h2645_find_new_access find;
 
+    n = PSI_STREAM_H264 == pes->codecid ? 4 : 5;
     data = pkt->data;
     end = pkt->data + pkt->size;
-    p = pkt->size < size + 5 ? pkt->data : end - size - 5; // start from trailing nalu
+    p = pkt->size - size < n ? pkt->data : end - size - n; // start from trailing nalu
     find = PSI_STREAM_H264 == pes->codecid ? mpeg_h264_find_new_access_unit : mpeg_h265_find_new_access_unit;
 
     // TODO: The first frame maybe not a valid frame, filter it
 
+    if (0 == pkt->codecid)
+    {
+        pkt->pts = pes->pts;
+        pkt->dts = pes->dts;
+        pkt->sid = pes->sid;
+        pkt->codecid = pes->codecid;
+        pkt->flags = pes->flags;
+    }
 
     // PES contain multiple packet
     n = find(p, end - p, &pkt->vcl);
@@ -83,6 +90,7 @@ static int mpeg_packet_h264_h265(struct packet_t* pkt, const struct pes_t* pes, 
         assert(pkt->vcl > 0);
 
         p += n;
+        pkt->flags = (pkt->flags ^ MPEG_FLAG_IDR_FRAME) | (1 == pkt->vcl ? MPEG_FLAG_IDR_FRAME : 0); // update key frame flags
         r = mpeg_packet_h264_h265_filter(pes->pn, pes->pid, pkt, data, p - data, handler, param);
         if (0 != r)
             return r;
@@ -97,7 +105,7 @@ static int mpeg_packet_h264_h265(struct packet_t* pkt, const struct pes_t* pes, 
     pkt->dts = pes->dts;
     pkt->sid = pes->sid;
     pkt->codecid = pes->codecid;
-    pkt->flags = pes->data_alignment_indicator ? 1 : 0;
+    pkt->flags = pes->flags;
 //    assert(0 == find(p, end - p)); // start with AUD
 
     // remain data
@@ -110,23 +118,52 @@ static int mpeg_packet_h264_h265(struct packet_t* pkt, const struct pes_t* pes, 
     return 0;
 }
 
-int pes_packet(struct packet_t* pkt, const struct pes_t* pes, const void* data, size_t size, int start, pes_packet_handler handler, void* param)
+static void pes_packet_codec_verify(struct pes_t* pes, const struct packet_t* pkt)
 {
     int r;
+    size_t i, n;
 
-    if (PSI_STREAM_H264 == pes->codecid || PSI_STREAM_H265 == pes->codecid)
+#if defined(MPEG_GUESS_STREAM) || defined(MPEG_H26X_VERIFY)
+    if (pes->codecid == PSI_STREAM_RESERVED && 0 == mpeg_h26x_verify(pkt->data, pkt->size, &r))
     {
-        r = mpeg_packet_append(pkt, data, size);
-        if (0 != r)
-            return r;
-
-        return mpeg_packet_h264_h265(pkt, pes, size, handler, param);
+        // modify codecid
+        static const uint8_t sc_codecid[] = { PSI_STREAM_RESERVED, PSI_STREAM_H264, PSI_STREAM_H265, PSI_STREAM_H266, PSI_STREAM_MPEG4, };
+        pes->codecid = sc_codecid[(r < 0 || r >= sizeof(sc_codecid) / sizeof(sc_codecid[0])) ? PSI_STREAM_RESERVED : r];
     }
-    else
+#endif
+
+#if defined(MPEG_DAHUA_AAC_FROM_G711)
+    if ((pes->codecid == PSI_STREAM_AUDIO_G711A || pes->codecid == PSI_STREAM_AUDIO_G711U)
+        && pkt->size > 7 && 0xFF == pkt->data[0] && 0xF0 == (pkt->data[1] & 0xF0))
     {
-        // use timestamp to split packet
-        assert(PTS_NO_VALUE != pes->dts);
-        if (pkt->size > 0 && (pkt->dts != pes->dts || start))
+        n = 7;
+        // calc mpeg4_aac_adts_frame_length
+        for (i = 0; i + 7 < pkt->size && n >= 7; i += n)
+        {
+            // fix n == 0
+            n = ((size_t)(pkt->data[i + 3] & 0x03) << 11) | ((size_t)pkt->data[i + 4] << 3) | ((size_t)(pkt->data[i + 5] >> 5) & 0x07);
+        }
+        pes->codecid = i == pkt->size ? PSI_STREAM_AAC : pes->codecid; // fix it
+    }
+#endif
+}
+
+int pes_packet(struct packet_t* pkt, struct pes_t* pes, const void* data, size_t size, int start, pes_packet_handler handler, void* param)
+{
+    int r;
+    size_t total;
+
+    total = size;
+    // use timestamp to split packet
+    assert(PTS_NO_VALUE != pes->dts);
+    if (pkt->size > 0 && (pkt->dts != pes->dts || start) 
+        // WARNING: don't use pes->codecid
+        && PSI_STREAM_H264 != pkt->codecid && PSI_STREAM_H265 != pkt->codecid && PSI_STREAM_H266 != pkt->codecid)
+    {
+        if(0 == pes->codecid)
+            pes_packet_codec_verify(pes, pkt); // verify on packet complete
+
+        if (PSI_STREAM_H264 != pes->codecid && PSI_STREAM_H265 != pes->codecid && PSI_STREAM_H266 != pes->codecid)
         {
             assert(PTS_NO_VALUE != pkt->dts);
             r = handler(param, pes->pn, pes->pid, pkt->codecid, pkt->flags, pkt->pts, pkt->dts, pkt->data, pkt->size);
@@ -134,23 +171,44 @@ int pes_packet(struct packet_t* pkt, const struct pes_t* pes, const void* data, 
             if (0 != r)
                 return r;
         }
+        else
+        {
+            assert(0 == pkt->codecid);
+            pkt->codecid = pes->codecid; // update previous packet codec id
+            total += pkt->size; // find nalu vcl
+        }
+    }
 
-        r = mpeg_packet_append(pkt, data, size);
-        if (0 != r)
-            return r;
+    // merge buffer
+    r = mpeg_packet_append(pkt, data, size);
+    if (0 != r)
+        return r;
 
+    if (PSI_STREAM_H264 == pes->codecid || PSI_STREAM_H265 == pes->codecid || PSI_STREAM_H266 == pes->codecid)
+    {
+        return mpeg_packet_h26x(pkt, pes, total, handler, param);
+    }
+    else
+    {
         // save pts/dts
         pkt->pts = pes->pts;
         pkt->dts = pes->dts;
         pkt->sid = pes->sid;
         pkt->codecid = pes->codecid;
-        pkt->flags = pes->data_alignment_indicator ? 1 : 0;
+        pkt->flags = pes->flags;
 
         // for audio packet only, H.264/H.265 pes->len maybe incorrect
-        assert(PSI_STREAM_H264 != pes->codecid && PSI_STREAM_H265 != pes->codecid);
+        assert(PSI_STREAM_H264 != pes->codecid && PSI_STREAM_H265 != pes->codecid && PSI_STREAM_H266 != pes->codecid);
+#if !defined(MPEG_LIVING_VIDEO_FRAME_DEMUX)
+        if (PES_SID_VIDEO != pes->sid)
+#endif
         if (pes->len > 0 && pes->pkt.size >= pes->len)
         {
-            assert(pes->pkt.size == pes->len); // packet lost
+            pes_packet_codec_verify(pes, pkt); // verify on packet complete
+            if (PSI_STREAM_H264 == pes->codecid || PSI_STREAM_H265 == pes->codecid || PSI_STREAM_H266 == pes->codecid)
+                return mpeg_packet_h26x(pkt, pes, size, handler, param);
+
+            assert(pes->pkt.size == pes->len || (pkt->flags & MPEG_FLAG_PACKET_CORRUPT)); // packet lost
             r = handler(param, pes->pn, pes->pid, pkt->codecid, pkt->flags, pkt->pts, pkt->dts, pes->pkt.data, pes->len);
             pkt->size = 0; // new packet start
         }

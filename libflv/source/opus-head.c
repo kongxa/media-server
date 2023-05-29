@@ -74,23 +74,32 @@ int opus_head_save(const struct opus_head_t* opus, uint8_t* data, size_t bytes)
 
 int opus_head_load(const uint8_t* data, size_t bytes, struct opus_head_t* opus)
 {
-    if (bytes < 19 || 0 != memcmp(data, "OpusHead", 8))
+    int n = 0;
+    if (bytes > 8 && 0 == memcmp(data, "OpusHead", 8))
+    {
+        n = 8;
+        data += 8;
+        bytes -= 8;
+    }
+
+    // check channels: [1, 8]
+    if (bytes < 11 || data[1] > 8 || data[1] < 1)
         return -1;
 
     memset(opus, 0, sizeof(*opus));
-    opus->version = data[8];
-    opus->channels = data[9];
-    opus->pre_skip = ((uint16_t)data[11] << 8) | data[10];
-    opus->input_sample_rate = ((uint32_t)data[15] << 24) | ((uint32_t)data[14] << 16) | ((uint32_t)data[13] << 8) | data[12];
-    opus->output_gain = ((uint16_t)data[17] << 8) | data[16];
-    opus->channel_mapping_family = data[18];
+    opus->version = data[0];
+    opus->channels = data[1];
+    opus->pre_skip = ((uint16_t)data[3] << 8) | data[2];
+    opus->input_sample_rate = ((uint32_t)data[7] << 24) | ((uint32_t)data[6] << 16) | ((uint32_t)data[5] << 8) | data[4];
+    opus->output_gain = ((uint16_t)data[9] << 8) | data[8];
+    opus->channel_mapping_family = data[10];
 
-    if (0 != opus->channel_mapping_family && bytes >= 29)
+    if (0 != opus->channel_mapping_family && bytes >= 21)
     {
-        opus->stream_count = data[19];
-        opus->coupled_count = data[20];
-        memcpy(opus->channel_mapping, data+21, 8);
-        return 29;
+        opus->stream_count = data[11];
+        opus->coupled_count = data[12];
+        memcpy(opus->channel_mapping, data+13, 8);
+        return 21 + n;
     }
     else
     {
@@ -99,10 +108,10 @@ int opus_head_load(const uint8_t* data, size_t bytes, struct opus_head_t* opus)
         memcpy(opus->channel_mapping, opus_channel_map[opus_head_channels(opus)-1], 8);
     }
 
-    return 19;
+    return 11 + n;
 }
 
-static const uint8_t* opus_parse_size(const uint8_t* data, int bytes, int *size)
+static const uint8_t* opus_parse_size(const uint8_t* data, size_t bytes, size_t *size)
 {
     if (bytes < 1)
         return NULL;
@@ -192,9 +201,9 @@ static const uint8_t* opus_parse_padding(const uint8_t* data, int len)
  |}                                              |           |       |
  */
 
-static const uint8_t* opus_ts_header(const uint8_t* data, int bytes, int* payload)
+static const uint8_t* opus_ts_header(const uint8_t* data, size_t bytes, size_t* payload)
 {
-    int i;
+    size_t i;
     int start_trim_flag;
     int end_trim_flag;
     int control_extension_flag;
@@ -244,12 +253,12 @@ static const uint8_t* opus_ts_header(const uint8_t* data, int bytes, int* payloa
     }
 }
 
-static int opus_parse_frames(const void* data, int len, int (*onframe)(uint8_t toc, const void* frame, int size), void* param)
+static int opus_parse_frames(const void* data, size_t len, int (*onframe)(uint8_t toc, const void* frame, size_t size), void* param)
 {
     int i, r;
     int vbr, count;
     uint8_t toc;
-    int n[48];
+    size_t n[48];
     const uint8_t* p, *end;
 
     if (len < 1)
@@ -301,7 +310,7 @@ static int opus_parse_frames(const void* data, int len, int (*onframe)(uint8_t t
         vbr = *p & 0x80;
         if (*p++ & 0x40) // padding
         {
-            p = opus_parse_padding(p, len);
+            p = opus_parse_padding(p, (int)len);
             if (!p)
                 return -1;
         }
@@ -353,10 +362,10 @@ static int opus_parse_frames(const void* data, int len, int (*onframe)(uint8_t t
     return 0;
 }
 
-int opus_packet_getframes(const void* data, int len, int (*onframe)(uint8_t toc, const void* frame, int size), void* param)
+int opus_packet_getframes(const void* data, size_t len, int (*onframe)(uint8_t toc, const void* frame, size_t size), void* param)
 {
     int r;
-    int payload;
+    size_t payload;
     const uint8_t* p, *end;
     
     p = (const uint8_t*)data;
@@ -380,8 +389,9 @@ int opus_packet_getframes(const void* data, int len, int (*onframe)(uint8_t toc,
 }
 
 #if defined(DEBUG) || defined(_DEBUG)
-static int opus_onframe(uint8_t toc, const void* frame, int size)
+static int opus_onframe(uint8_t toc, const void* frame, size_t size)
 {
+    (void)toc, frame, size;
     return 0;
 }
 

@@ -2,9 +2,8 @@
 // Information technology - Generic coding of moving pictures and associated audio information: Systems
 // 2.5.3.1 Program stream(p74)
 
-#include "mpeg-ts-proto.h"
-#include "mpeg-ps-proto.h"
-#include "mpeg-pes-proto.h"
+#include "mpeg-pes-internal.h"
+#include "mpeg-ps-internal.h"
 #include "mpeg-util.h"
 #include "mpeg-ps.h"
 #include <errno.h>
@@ -12,9 +11,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <time.h>
 
 #define MAX_PES_HEADER	1024	// pack_header + system_header + psm
-#define MAX_PES_PACKET	0xFFFF	// 64k pes data
+#define MAX_PES_PACKET	0xFF80	// 64k pes data, reserved 0x7F for hik
 
 struct ps_muxer_t
 {
@@ -22,7 +22,7 @@ struct ps_muxer_t
     struct ps_pack_header_t pack;
     struct ps_system_header_t system;
     
-    int h264_h265_with_aud;
+    int h26x_with_aud;
 	unsigned int psm_period;
 	unsigned int scr_period;
 
@@ -61,7 +61,9 @@ int ps_muxer_input(struct ps_muxer_t* ps, int streamid, int flags, int64_t pts, 
     stream->pts = pts;
     stream->dts = dts;
 
-    ps->h264_h265_with_aud = (flags & MPEG_FLAG_H264_H265_WITH_AUD) ? 1 : 0;
+	// Add PSM for IDR frame
+	ps->psm_period = ((flags & MPEG_FLAG_IDR_FRAME) && mpeg_stream_type_video(stream->codecid)) ? 0 : ps->psm_period;
+    ps->h26x_with_aud = (flags & MPEG_FLAG_H264_H265_WITH_AUD) ? 1 : 0;
 
 	// TODO: 
 	// 1. update packet header program_mux_rate
@@ -70,25 +72,35 @@ int ps_muxer_input(struct ps_muxer_t* ps, int streamid, int flags, int64_t pts, 
 	// alloc once (include Multi-PES packet)
 	sz = bytes + MAX_PES_HEADER + (bytes/MAX_PES_PACKET+1) * 64; // 64 = 0x000001 + stream_id + PES_packet_length + other
 	packet = ps->func.alloc(ps->param, sz);
-	if(!packet) return ENOMEM;
+	if(!packet) return -ENOMEM;
 
 	// write pack_header(p74)
 	// 2.7.1 Frequency of coding the system clock reference
 	// http://www.bretl.com/mpeghtml/SCR.HTM
 	//the maximum allowed interval between SCRs is 700ms 
 	//ps->pack.system_clock_reference_base = (dts-3600) % (((int64_t)1)<<33);
-	ps->pack.system_clock_reference_base = dts - 3600;
+	ps->pack.system_clock_reference_base = dts >= 3600 ? (dts - 3600) : 0;
 	ps->pack.system_clock_reference_extension = 0;
 	ps->pack.program_mux_rate = 6106;
 	i += pack_header_write(&ps->pack, packet + i);
 
+#if !defined(MPEG_FIX_VLC_3_X_PS_SYSTEM_HEADER)
+    // https://github.com/videolan/vlc/blob/3.0.x/modules/demux/mpeg/ps.h#L488
+    // fix ps_pkt_parse_system -> ps_track_fill with default mp1/2 audio codec(without psm)
+    
 	// write system_header(p76)
 	if(0 == (ps->psm_period % 30))
 		i += system_header_write(&ps->system, packet + i);
+#endif
 
 	// write program_stream_map(p79)
-	if(0 == (ps->psm_period % 30))
+	if (0 == (ps->psm_period % 30))
+	{
+#if defined(MPEG_CLOCK_EXTENSION_DESCRIPTOR)
+		ps->psm.clock = time() * 1000; // todo: gettimeofday
+#endif
 		i += psm_write(&ps->psm, packet + i);
+	}
 
 	// check packet size
 	assert(i < MAX_PES_HEADER);
@@ -100,11 +112,13 @@ int ps_muxer_input(struct ps_muxer_t* ps, int streamid, int flags, int64_t pts, 
 		uint8_t *pes = packet + i;
 		
 		p = pes + pes_write_header(stream, pes, sz - i);
+		stream->pts = stream->dts = PTS_NO_VALUE; // clear pts/dts flags
+		stream->data_alignment_indicator = 0; // clear flags
 		assert(p - pes < 64);
 
 		if(first)
 		{
-			if (PSI_STREAM_H264 == stream->codecid && !ps->h264_h265_with_aud)
+			if (PSI_STREAM_H264 == stream->codecid && !ps->h26x_with_aud)
 			{
 				// 2.14 Carriage of Rec. ITU-T H.264 | ISO/IEC 14496-10 video
 				// Each AVC access unit shall contain an access unit delimiter NAL Unit
@@ -113,14 +127,24 @@ int ps_muxer_input(struct ps_muxer_t* ps, int streamid, int flags, int64_t pts, 
 				p[5] = 0xE0; // any slice type (0xe) + rbsp stop one bit
 				p += 6;
 			}
-			else if (PSI_STREAM_H265 == stream->codecid && !ps->h264_h265_with_aud)
+			else if (PSI_STREAM_H265 == stream->codecid && !ps->h26x_with_aud)
 			{
 				// 2.17 Carriage of HEVC
 				// Each HEVC access unit shall contain an access unit delimiter NAL unit.
 				nbo_w32(p, 0x00000001);
 				p[4] = 0x46; // 35-AUD_NUT
-				p[5] = 01;
+				p[5] = 0x01;
 				p[6] = 0x50; // B&P&I (0x2) + rbsp stop one bit
+				p += 7;
+			}
+			else if (PSI_STREAM_H266 == stream->codecid && !ps->h26x_with_aud)
+			{
+				// 2.23 Carriage of VVC
+				// Each VVC access unit shall contain an access unit delimiter NAL unit
+				nbo_w32(p, 0x00000001);
+				p[4] = 0x00; // 20-AUD_NUT
+				p[5] = 0xA1;
+				p[6] = 0x18; // B&P&I (0x1) + rbsp stop one bit
 				p += 7;
 			}
 		}

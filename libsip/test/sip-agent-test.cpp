@@ -21,9 +21,12 @@
 #include "md5.h"
 #include <stdint.h>
 
+#define LOOP 100
 #define NQUEUE 3
 #define NCONCURRENT 200
 #define CHANNEL_DONE ((void*)0xabcdef98)
+
+#define TRANSPORT_PACKET_LOST 20
 
 struct sip_tu_t
 {
@@ -91,7 +94,7 @@ static int sip_uac_transport_via(void* transport, const char* destination, char 
 
 	addrlen = sizeof(addr);
 	memset(&addr, 0, sizeof(addr));
-	strcpy(protocol, "UDP");
+	snprintf(protocol, 16, "%s", "UDP");
 
 	uri = uri_parse(destination, strlen(destination));
 	if (!uri)
@@ -143,7 +146,7 @@ static int sip_uac_transport_send(void* param, const void* data, size_t bytes)
 {
 	struct sip_task_t *task = (struct sip_task_t*)param;
 
-	if ((rand() % 100) < 20)
+	if ((rand() % 100) < TRANSPORT_PACKET_LOST)
 		return 0; // packet lost
 
 	int i = rand() % NQUEUE;
@@ -166,7 +169,7 @@ static int sip_uas_transport_send(void* param, const struct cstring_t* /*protoco
     struct sip_tu_t* tu = (struct sip_tu_t*)param;
     struct sip_tu_t* peer = tu == &s_sip.alice ? &s_sip.bob : &s_sip.alice;
 
-	if ((rand() % 100) < 20)
+	if ((rand() % 100) < TRANSPORT_PACKET_LOST)
 		return 0; // packet lost
 
 	sip_packet_t pkt;
@@ -226,7 +229,7 @@ static void sip_uac_register_test(struct sip_task_t *task)
 	assert(0 == task->event.Wait());
 }
 
-static void* sip_uac_oninvited(void* param, const struct sip_message_t* reply, struct sip_uac_transaction_t* t, struct sip_dialog_t* dialog, int code)
+static int sip_uac_oninvited(void* param, const struct sip_message_t* reply, struct sip_uac_transaction_t* t, struct sip_dialog_t* dialog, int code, void** session)
 {
 	assert(code >= 100 && code < 700);
 	if (code >= 200 && code < 700)
@@ -236,6 +239,11 @@ static void* sip_uac_oninvited(void* param, const struct sip_message_t* reply, s
 		task->failed += (code >= 300 && code < 700);
 		assert(task->dialog == NULL);
 		task->dialog = dialog;
+		if (200 <= code && code < 300)
+		{
+			*session = NULL;
+			sip_uac_ack(t, NULL, 0);
+		}
 		task->event.Signal();
 	}
 	return NULL;
@@ -278,7 +286,7 @@ static int STDCALL AliceThread(void* param)
 {
 	struct sip_task_t* task = (struct sip_task_t*)param;
 
-	for (int i = 0; i < 100; i++)
+	for (int i = 0; i < LOOP; i++)
 	{
 		switch (rand() % 3)
 		{
@@ -311,16 +319,17 @@ static void sip_uas_task_ondestroy(void* param)
     assert(atomic_decrement32(&tu->count) >= 0);
 }
 
-static void* sip_uas_oninvite(void* param, const struct sip_message_t* req, struct sip_uas_transaction_t* t, struct sip_dialog_t* dialog, const void* data, int bytes)
+static int sip_uas_oninvite(void* param, const struct sip_message_t* req, struct sip_uas_transaction_t* t, struct sip_dialog_t* dialog, const void* data, int bytes, void** session)
 {
+	*session = t;
 	char contact[128];
-    struct sip_tu_t* tu = (struct sip_tu_t*)param;
+	struct sip_tu_t* tu = (struct sip_tu_t*)param;
     atomic_increment32(&tu->count);
     sip_uas_transaction_ondestroy(t, sip_uas_task_ondestroy, param);
 	sip_contact_write(&req->to, contact, contact+sizeof(contact));
 	sip_uas_add_header(t, "Contact", contact);
-	assert(0 == sip_uas_reply(t, 200, NULL, 0));
-	return t;
+	assert(0 == sip_uas_reply(t, 200, NULL, 0, param));
+	return 0;
 }
 
 /// @param[in] code 0-ok, other-sip status code
@@ -336,7 +345,7 @@ static int sip_uas_onbye(void* param, const struct sip_message_t* req, struct si
     struct sip_tu_t* tu = (struct sip_tu_t*)param;
     atomic_increment32(&tu->count);
     sip_uas_transaction_ondestroy(t, sip_uas_task_ondestroy, param);
-	return sip_uas_reply(t, 200, NULL, 0);
+	return sip_uas_reply(t, 200, NULL, 0, param);
 }
 
 /// cancel a transaction(should be an invite transaction)
@@ -345,7 +354,7 @@ static int sip_uas_oncancel(void* param, const struct sip_message_t* req, struct
     struct sip_tu_t* tu = (struct sip_tu_t*)param;
     atomic_increment32(&tu->count);
     sip_uas_transaction_ondestroy(t, sip_uas_task_ondestroy, param);
-	return sip_uas_reply(t, 200, NULL, 0);
+	return sip_uas_reply(t, 200, NULL, 0, param);
 }
 
 /// @param[in] expires in seconds
@@ -354,7 +363,7 @@ static int sip_uas_onregister(void* param, const struct sip_message_t* req, stru
     struct sip_tu_t* tu = (struct sip_tu_t*)param;
     atomic_increment32(&tu->count);
     sip_uas_transaction_ondestroy(t, sip_uas_task_ondestroy, param);
-	return sip_uas_reply(t, 200, NULL, 0);
+	return sip_uas_reply(t, 200, NULL, 0, param);
 }
 
 static int sip_uas_onmessage(void* param, const struct sip_message_t* req, struct sip_uas_transaction_t* t, void* session, const void* payload, int bytes)
@@ -362,7 +371,7 @@ static int sip_uas_onmessage(void* param, const struct sip_message_t* req, struc
     struct sip_tu_t* tu = (struct sip_tu_t*)param;
     atomic_increment32(&tu->count);
     sip_uas_transaction_ondestroy(t, sip_uas_task_ondestroy, param);
-	return sip_uas_reply(t, 200, NULL, 0);
+	return sip_uas_reply(t, 200, NULL, 0, param);
 }
 
 static int STDCALL InputThread(struct sip_tu_t* tu, int idx)
@@ -385,7 +394,7 @@ static int STDCALL InputThread(struct sip_tu_t* tu, int idx)
 		assert(0 == http_parser_input(parser, pkt.ptr, &n));
 		struct sip_message_t* msg = sip_message_create(response ? SIP_MESSAGE_REPLY : SIP_MESSAGE_REQUEST);
 		assert(0 == sip_message_load(msg, parser));
-		assert(0 == sip_agent_input(tu->sip, msg));
+		assert(0 == sip_agent_input(tu->sip, msg, tu));
 		sip_message_destroy(msg);
 		
 		free(pkt.ptr);
@@ -427,8 +436,8 @@ extern "C" void sip_agent_test(void)
 	handler.send = sip_uas_transport_send;
 
 	s_sip.udp = socket_udp();
-	s_sip.alice.sip = sip_agent_create(&handler, &s_sip.alice);
-	s_sip.bob.sip = sip_agent_create(&handler, &s_sip.bob);
+	s_sip.alice.sip = sip_agent_create(&handler);
+	s_sip.bob.sip = sip_agent_create(&handler);
     s_sip.alice.count = 0;
     s_sip.bob.count = 0;
 
